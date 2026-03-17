@@ -9,9 +9,10 @@
 # Each waypoint is converted to joint space via IK, singularity-checked, then executed.
 # After the transit the C1 pick/place sequence runs unchanged.
 #
-# Produces two matplotlib plots:
-#   /tmp/c2_task_space.png  — XY path with obstacle circles
-#   /tmp/c2_joint_space.png — joint pulse values across waypoints
+# Produces matplotlib plots saved next to this script:
+#   c2_task_space.png   — XY path with obstacle circles (transit 1 preview)
+#   c2_all_transits.png — all 3 A* transits overlaid
+#   c2_joint_space.png  — joint pulse values across all transit waypoints
 #
 # Usage (sim):
 #   roslaunch hiwonder_grasp sim_pick_place.launch
@@ -31,6 +32,9 @@ import matplotlib
 matplotlib.use('TkAgg' if 'DISPLAY' in os.environ else 'Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+
+# Directory containing this script — plots are saved here
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ── Guard: offline A* test must run before rospy import ──────────────────────
 _TEST_ASTAR = '--test-astar' in sys.argv
@@ -305,41 +309,36 @@ class AStarPlanner:
 # PLOTTING
 # ============================================================
 
-def plot_task_space(start_xy, goal_xy, obstacle_positions, raw_path, smoothed,
-                    safety_radius=OBSTACLE_SAFETY_RADIUS,
-                    save_path='/tmp/c2_task_space.png'):
-    """XY plot: workspace, obstacles, raw A* path, smoothed waypoints."""
-    fig, ax = plt.subplots(figsize=(9, 9))
-
-    # Workspace boundary
-    ws = mpatches.Rectangle(
-        (WORKSPACE_X[0], WORKSPACE_Y[0]),
-        WORKSPACE_X[1] - WORKSPACE_X[0],
-        WORKSPACE_Y[1] - WORKSPACE_Y[0],
-        fill=False, edgecolor='gray', linewidth=1.2, linestyle='--', label='Workspace')
-    ax.add_patch(ws)
-
-    # Obstacle circles
+def _draw_obstacle_circles(ax, obstacle_positions, safety_radius):
+    """Helper: draw obstacle exclusion circles and centre markers on ax."""
     for i, (ox, oy) in enumerate(obstacle_positions):
-        circle = plt.Circle((ox, oy), safety_radius,
-                             color='red', alpha=0.25)
-        ax.add_patch(circle)
+        ax.add_patch(plt.Circle((ox, oy), safety_radius, color='red', alpha=0.25))
         ax.plot(ox, oy, 'rx', markersize=9, markeredgewidth=2,
                 label='Obstacle' if i == 0 else '_nolegend_')
         ax.annotate(f'obs ({ox:.2f},{oy:.2f})', xy=(ox, oy),
                     xytext=(ox + 0.01, oy + 0.012), fontsize=7, color='darkred')
 
-    # Raw A* path
+
+def plot_task_space(start_xy, goal_xy, obstacle_positions, raw_path, smoothed,
+                    safety_radius=OBSTACLE_SAFETY_RADIUS,
+                    save_path=os.path.join(SCRIPT_DIR, 'c2_task_space.png')):
+    """XY plot: workspace, obstacles, raw A* path, smoothed waypoints (transit 1 preview)."""
+    fig, ax = plt.subplots(figsize=(9, 9))
+
+    ax.add_patch(mpatches.Rectangle(
+        (WORKSPACE_X[0], WORKSPACE_Y[0]),
+        WORKSPACE_X[1] - WORKSPACE_X[0], WORKSPACE_Y[1] - WORKSPACE_Y[0],
+        fill=False, edgecolor='gray', linewidth=1.2, linestyle='--', label='Workspace'))
+
+    _draw_obstacle_circles(ax, obstacle_positions, safety_radius)
+
     if raw_path:
         px, py = zip(*raw_path)
         ax.plot(px, py, 'b-', linewidth=0.8, alpha=0.35, label='A* raw path')
-
-    # Smoothed waypoints
     if smoothed:
         wx, wy = zip(*smoothed)
         ax.plot(wx, wy, 'g-o', linewidth=2.0, markersize=6, label='Smoothed waypoints')
 
-    # Start and goal markers
     ax.plot(start_xy[0], start_xy[1], 'go', markersize=13, label='Start (home EEF)',
             markeredgecolor='darkgreen', markeredgewidth=1.5)
     ax.plot(goal_xy[0], goal_xy[1], 'b^', markersize=13, label='Goal (target tag)',
@@ -347,7 +346,7 @@ def plot_task_space(start_xy, goal_xy, obstacle_positions, raw_path, smoothed,
 
     ax.set_xlabel('X (m)', fontsize=12)
     ax.set_ylabel('Y (m)', fontsize=12)
-    ax.set_title('Challenge 2: A* Task Space Path with Obstacle Avoidance', fontsize=13)
+    ax.set_title('Challenge 2: A* Transit 1 — Home → Target', fontsize=13)
     ax.legend(loc='upper right', fontsize=9)
     ax.set_aspect('equal')
     ax.grid(True, alpha=0.3)
@@ -361,7 +360,54 @@ def plot_task_space(start_xy, goal_xy, obstacle_positions, raw_path, smoothed,
     plt.close(fig)
 
 
-def plot_joint_space(joint_trajectory, save_path='/tmp/c2_joint_space.png'):
+def plot_all_transits(home_xy, target_xy, place_xy, obstacle_positions,
+                      paths, safety_radius=OBSTACLE_SAFETY_RADIUS,
+                      save_path=os.path.join(SCRIPT_DIR, 'c2_all_transits.png')):
+    """
+    XY plot showing all 3 A* transits on one axes.
+    paths: list of (raw_path, smoothed, color, label) tuples.
+    """
+    fig, ax = plt.subplots(figsize=(10, 10))
+
+    ax.add_patch(mpatches.Rectangle(
+        (WORKSPACE_X[0], WORKSPACE_Y[0]),
+        WORKSPACE_X[1] - WORKSPACE_X[0], WORKSPACE_Y[1] - WORKSPACE_Y[0],
+        fill=False, edgecolor='gray', linewidth=1.2, linestyle='--', label='Workspace'))
+
+    _draw_obstacle_circles(ax, obstacle_positions, safety_radius)
+
+    for raw_path, smoothed, color, label in paths:
+        if raw_path:
+            px, py = zip(*raw_path)
+            ax.plot(px, py, '-', color=color, linewidth=0.8, alpha=0.3)
+        if smoothed:
+            wx, wy = zip(*smoothed)
+            ax.plot(wx, wy, '-o', color=color, linewidth=2.0, markersize=6, label=label)
+
+    ax.plot(home_xy[0],   home_xy[1],   'go', markersize=13, label='Home',
+            markeredgecolor='darkgreen', markeredgewidth=1.5)
+    ax.plot(target_xy[0], target_xy[1], 'b^', markersize=13, label='Target (pick)',
+            markeredgecolor='darkblue', markeredgewidth=1.5)
+    ax.plot(place_xy[0],  place_xy[1],  'ms', markersize=13, label='Place goal',
+            markeredgecolor='darkmagenta', markeredgewidth=1.5)
+
+    ax.set_xlabel('X (m)', fontsize=12)
+    ax.set_ylabel('Y (m)', fontsize=12)
+    ax.set_title('Challenge 2: Full A* Trajectory (all transits)', fontsize=13)
+    ax.legend(loc='upper right', fontsize=9)
+    ax.set_aspect('equal')
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150)
+    print(f"Full transit plot saved to {save_path}")
+    try:
+        plt.show()
+    except Exception:
+        pass
+    plt.close(fig)
+
+
+def plot_joint_space(joint_trajectory, save_path=os.path.join(SCRIPT_DIR, 'c2_joint_space.png')):
     """Time-series of servo pulse values for each joint across all waypoints."""
     if not joint_trajectory:
         print("No joint trajectory data to plot.")
@@ -514,79 +560,96 @@ def sim_detach():
 
 
 # ============================================================
-# PICK / PLACE  (identical logic to pick_place.py)
+# PICK / PLACE  — vertical-only sequences
+# A* handles all horizontal transits; these functions only move
+# vertically (descend → act → ascend) at a fixed XY position.
+# The arm is assumed to already be at [x, y, transit_z] on entry.
 # ============================================================
 
-def execute_pick(tag_pos):
+def get_current_eef_xy():
+    """Return current EEF (x, y) from FK, or None on failure."""
+    ok, _, pose = get_current_pose()
+    if ok:
+        return (pose.position.x, pose.position.y)
+    rospy.logwarn("get_current_eef_xy: FK call failed")
+    return None
+
+
+def execute_pick_at(tag_pos, transit_z):
+    """
+    Vertical pick sequence. Arm must already be at [x, y, transit_z].
+    Steps: descend → grasp → ascend back to transit_z.
+    Returns True on success.
+    """
     x, y, z = tag_pos
-    rospy.loginfo("=== PICK SEQUENCE START ===  target=[%.4f, %.4f, %.4f]", x, y, z)
+    rospy.loginfo("=== PICK ===  [%.4f, %.4f, %.4f]  transit_z=%.4f", x, y, z, transit_z)
 
-    approach_pitch = PICK_PITCH
+    # Pre-solve descent IK in sim before commanding (avoids PID drift during solve)
+    grasp_pitch = PICK_PITCH
     if SIM_MODE:
-        rospy.loginfo("SIM: pre-solving approach IK...")
-        pre = solve_and_move([x, y, z + APPROACH_HIGH], dry_run=True)
+        pre = solve_and_move([x, y, z - GRASP_Z_BELOW], dry_run=True)
         if pre is None:
-            rospy.logerr("Pre-solve failed — aborting pick")
+            rospy.logerr("Pre-solve failed for descent — aborting pick")
             return False
-        approach_pitch = _last_used_pitch
+        grasp_pitch = _last_used_pitch
 
-    rospy.loginfo("Step 0: open gripper + neutral wrist")
-    set_gripper(GRIPPER_OPEN)
-    set_wrist(500)
-
-    rospy.loginfo("Step 1: approach  → [%.4f, %.4f, %.4f]", x, y, z + APPROACH_HIGH)
-    result = solve_and_move([x, y, z + APPROACH_HIGH], pitch=approach_pitch,
-                             duration=DURATION_MOVE, no_fallback=SIM_MODE)
-    if result is None:
-        return False
-
-    rospy.loginfo("Step 2: descend   → [%.4f, %.4f, %.4f]", x, y, z - GRASP_Z_BELOW)
-    result = solve_and_move([x, y, z - GRASP_Z_BELOW], pitch=_last_used_pitch,
+    # Descend to grasp height
+    rospy.loginfo("Step 1: descend → [%.4f, %.4f, %.4f]", x, y, z - GRASP_Z_BELOW)
+    result = solve_and_move([x, y, z - GRASP_Z_BELOW], pitch=grasp_pitch,
                              duration=DURATION_FINE, no_fallback=True)
     if result is None:
         return False
 
-    rospy.loginfo("Step 3: close gripper")
+    # Grasp
+    rospy.loginfo("Step 2: close gripper")
     set_gripper(GRIPPER_CLOSE)
     rospy.sleep(0.5)
     sim_attach()
 
-    rospy.loginfo("Step 4: retract to home")
-    go_home(duration=DURATION_MOVE, keep_gripper=True)
+    # Ascend back to transit height so A* transit 2 can start cleanly
+    rospy.loginfo("Step 3: ascend → [%.4f, %.4f, %.4f]", x, y, transit_z)
+    solve_and_move([x, y, transit_z], pitch=_last_used_pitch,
+                   duration=DURATION_MOVE, no_fallback=True)
+
     rospy.loginfo("=== PICK COMPLETE ===")
     return True
 
 
-def execute_place(goal_pos):
+def execute_place_at(goal_pos, transit_z):
+    """
+    Vertical place sequence. Arm must already be at [x, y, transit_z].
+    Steps: descend → release → ascend back to transit_z.
+    Returns True on success.
+    """
     x, y, z = goal_pos
-    rospy.loginfo("=== PLACE SEQUENCE START ===  goal=[%.4f, %.4f, %.4f]", x, y, z)
+    rospy.loginfo("=== PLACE ===  [%.4f, %.4f, %.4f]  transit_z=%.4f", x, y, z, transit_z)
 
     place_pitch = PICK_PITCH
     if SIM_MODE:
-        rospy.loginfo("SIM: pre-solving place IK...")
         pre = solve_and_move([x, y, z], dry_run=True)
         if pre is None:
-            rospy.logerr("Pre-solve failed — aborting place")
+            rospy.logerr("Pre-solve failed for place — aborting")
             return False
         place_pitch = _last_used_pitch
 
-    if TRANSIT_POS is not None:
-        rospy.loginfo("Step 1a: transit waypoint → %s", TRANSIT_POS)
-        solve_and_move(TRANSIT_POS, duration=DURATION_MOVE)
-
-    rospy.loginfo("Step 1b: move to place goal → [%.4f, %.4f, %.4f]", x, y, z)
+    # Descend to place height
+    rospy.loginfo("Step 1: descend → [%.4f, %.4f, %.4f]", x, y, z)
     result = solve_and_move([x, y, z], pitch=place_pitch,
                              duration=DURATION_MOVE, no_fallback=SIM_MODE)
     if result is None:
         return False
 
+    # Release
     rospy.loginfo("Step 2: release")
     sim_detach()
     set_gripper(GRIPPER_OPEN)
     rospy.sleep(0.5)
 
-    rospy.loginfo("Step 3: retract to home")
-    go_home(duration=DURATION_MOVE)
+    # Ascend back to transit height so A* transit 3 can start cleanly
+    rospy.loginfo("Step 3: ascend → [%.4f, %.4f, %.4f]", x, y, transit_z)
+    solve_and_move([x, y, transit_z], pitch=_last_used_pitch,
+                   duration=DURATION_MOVE, no_fallback=True)
+
     rospy.loginfo("=== PLACE COMPLETE ===")
     return True
 
@@ -771,37 +834,47 @@ def main():
         return
     rospy.loginfo("Target pose (base): %s", target_pose)
 
-    # ── Step 5: Get start XY from FK at home ──────────────────────────────────
-    ok, _, eef_pose = get_current_pose()
-    if not ok:
-        rospy.logwarn("FK failed — using home position estimate as start")
-        start_xy = (0.15, 0.0)
-    else:
-        start_xy = (eef_pose.position.x, eef_pose.position.y)
-    rospy.loginfo("A* start XY: [%.4f, %.4f]", *start_xy)
+    # ── Step 5: Get home EEF XY from FK (arm is at home right now) ───────────
+    home_xy = get_current_eef_xy()
+    if home_xy is None:
+        rospy.logwarn("FK failed — using fallback home XY estimate")
+        home_xy = (0.15, 0.0)
+    rospy.loginfo("Home EEF XY: [%.4f, %.4f]", *home_xy)
 
-    goal_xy     = (target_pose[0], target_pose[1])
-    transit_z   = target_pose[2] + APPROACH_HIGH
+    target_xy = (target_pose[0], target_pose[1])
+    place_xy  = (PLACE_GOAL[0],  PLACE_GOAL[1])
+    transit_z = target_pose[2] + APPROACH_HIGH
 
-    # ── Step 6: Plan A* path ──────────────────────────────────────────────────
-    rospy.loginfo("Running A* planner...")
+    # ── Step 6: Build planner (reused for all 3 transits) ────────────────────
+    rospy.loginfo("Building A* planner (safety_radius=%.3f m)...", safety_radius)
     planner = AStarPlanner()
     planner.set_obstacles(obstacle_positions, safety_radius=safety_radius)
 
-    raw_path = planner.plan(start_xy, goal_xy)
-    if not raw_path:
-        rospy.logerr("A* found no path — check obstacle positions and workspace bounds")
+    def plan(start, goal, label):
+        raw  = planner.plan(start, goal)
+        if not raw:
+            rospy.logerr("A* found no path for %s — aborting", label)
+            return None, None
+        smooth = planner.smooth_path(raw)
+        rospy.loginfo("%s: %d cells → %d waypoints", label, len(raw), len(smooth))
+        return raw, smooth
+
+    # ── Step 7: Plan all 3 transits ──────────────────────────────────────────
+    raw1, smooth1 = plan(home_xy,   target_xy, "Transit 1 (home→target)")
+    if smooth1 is None:
         return
-    rospy.loginfo("A* raw path: %d cells", len(raw_path))
+    raw2, smooth2 = plan(target_xy, place_xy,  "Transit 2 (target→place)")
+    if smooth2 is None:
+        return
+    raw3, smooth3 = plan(place_xy,  home_xy,   "Transit 3 (place→home)")
+    if smooth3 is None:
+        return
 
-    smoothed = planner.smooth_path(raw_path)
-    rospy.loginfo("Smoothed path: %d waypoints", len(smoothed))
+    # ── Step 8: Preview transit 1 plot before execution ──────────────────────
+    plot_task_space(home_xy, target_xy, obstacle_positions,
+                    raw1, smooth1, safety_radius)
 
-    # ── Step 7: Task-space plot (show before execution) ───────────────────────
-    plot_task_space(start_xy, goal_xy, obstacle_positions,
-                    raw_path, smoothed, safety_radius)
-
-    print("\nPlot generated.  Press Enter to execute transit (or Ctrl-C to abort): ",
+    print("\nPlot generated.  Press Enter to execute (or Ctrl-C to abort): ",
           end='', flush=True)
     try:
         input()
@@ -809,19 +882,50 @@ def main():
         rospy.loginfo("Aborted by user.")
         return
 
-    # ── Step 8: Execute transit along A* waypoints ────────────────────────────
-    rospy.loginfo("=== TRANSIT START: %d waypoints at z=%.4f ===", len(smoothed), transit_z)
-    joint_traj = execute_transit(smoothed, transit_z)
+    # ── Step 9: Open gripper + neutral wrist before first transit ─────────────
+    set_gripper(GRIPPER_OPEN)
+    set_wrist(500)
 
-    # ── Step 9: Joint-space plot ──────────────────────────────────────────────
-    plot_joint_space(joint_traj)
+    # ── Step 10: TRANSIT 1 — home → above target ─────────────────────────────
+    rospy.loginfo("=== TRANSIT 1: home → target (%d waypoints, z=%.4f) ===",
+                  len(smooth1), transit_z)
+    jt1 = execute_transit(smooth1, transit_z)
 
-    # ── Step 10: Pick the target object (C1 logic) ────────────────────────────
-    pick_ok = execute_pick(target_pose)
+    # ── Step 11: PICK (descend → grasp → ascend) ─────────────────────────────
+    pick_ok = execute_pick_at(target_pose, transit_z)
+    if not pick_ok:
+        rospy.logerr("Pick failed — aborting")
+        go_home(keep_gripper=False)
+        return
 
-    # ── Step 11: Place ────────────────────────────────────────────────────────
-    if pick_ok:
-        execute_place(PLACE_GOAL)
+    # ── Step 12: TRANSIT 2 — above target → above place goal ─────────────────
+    rospy.loginfo("=== TRANSIT 2: target → place (%d waypoints, z=%.4f) ===",
+                  len(smooth2), transit_z)
+    jt2 = execute_transit(smooth2, transit_z)
+
+    # ── Step 13: PLACE (descend → release → ascend) ───────────────────────────
+    execute_place_at(PLACE_GOAL, transit_z)
+
+    # ── Step 14: TRANSIT 3 — above place → home ──────────────────────────────
+    rospy.loginfo("=== TRANSIT 3: place → home (%d waypoints, z=%.4f) ===",
+                  len(smooth3), transit_z)
+    jt3 = execute_transit(smooth3, transit_z)
+
+    # ── Step 15: Final go_home to reset joint configuration ──────────────────
+    go_home()
+
+    # ── Step 16: Plots ────────────────────────────────────────────────────────
+    all_jt = jt1 + jt2 + jt3
+    plot_joint_space(all_jt)
+
+    plot_all_transits(
+        home_xy, target_xy, place_xy, obstacle_positions,
+        paths=[
+            (raw1, smooth1, 'green',  'Transit 1: home → target'),
+            (raw2, smooth2, 'blue',   'Transit 2: target → place'),
+            (raw3, smooth3, 'orange', 'Transit 3: place → home'),
+        ],
+        safety_radius=safety_radius)
 
     rospy.loginfo("Challenge 2 complete.")
 
@@ -853,7 +957,7 @@ if __name__ == '__main__':
             print(f"  wp {i:02d}: [{x:.4f}, {y:.4f}]")
 
         plot_task_space(start, goal, obs, path, smoothed, radius,
-                        save_path='/tmp/c2_astar_test.png')
+                        save_path=os.path.join(SCRIPT_DIR, 'c2_astar_test.png'))
         sys.exit(0)
 
     try:
