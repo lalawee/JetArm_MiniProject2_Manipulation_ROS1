@@ -35,8 +35,9 @@ from gazebo_msgs.msg import ModelStates
 
 # Mapping: Gazebo model name → AprilTag ID
 CUBE_MODELS = {
-    'apriltag_cube':   1,
-    'apriltag_cube_2': 2,
+    'apriltag_cube':   1,   # target (orange top)
+    'apriltag_cube_2': 2,   # obstacle (blue top)
+    'apriltag_cube_3': 3,   # obstacle (green top) — added for Challenge 2
 }
 
 # TF frame names

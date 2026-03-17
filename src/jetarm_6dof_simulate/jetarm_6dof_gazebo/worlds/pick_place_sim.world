@@ -247,6 +247,84 @@
       </link>
     </model>
 
+    <!-- ============================================================
+         AprilTag Cube 3 — Tag ID 3
+         Obstacle block positioned along the direct path from the home
+         EEF position to the target (cube 1), forcing the A* planner
+         to route around it.
+
+         Position: 17 cm forward, 6 cm to the right (negative Y).
+         Green top to distinguish from cube 1 (orange) and cube 2 (blue).
+         ============================================================ -->
+    <model name="apriltag_cube_3">
+      <pose frame="">0.17 -0.06 0.025 0 0 0</pose>
+      <static>0</static>
+      <link name="link">
+        <inertial>
+          <mass>0.02</mass>
+          <inertia>
+            <ixx>2.67e-6</ixx><ixy>0</ixy><ixz>0</ixz>
+            <iyy>2.67e-6</iyy><iyz>0</iyz>
+            <izz>2.67e-6</izz>
+          </inertia>
+        </inertial>
+        <collision name="collision">
+          <geometry>
+            <box><size>0.03 0.03 0.05</size></box>
+          </geometry>
+          <surface>
+            <friction>
+              <ode><mu>3.0</mu><mu2>3.0</mu2></ode>
+            </friction>
+          </surface>
+        </collision>
+        <!-- Body: dark grey -->
+        <visual name="body">
+          <geometry>
+            <box><size>0.03 0.03 0.048</size></box>
+          </geometry>
+          <pose frame="">0 0 -0.001 0 0 0</pose>
+          <material>
+            <ambient>0.15 0.15 0.15 1</ambient>
+            <diffuse>0.15 0.15 0.15 1</diffuse>
+          </material>
+        </visual>
+        <!-- Top face: green -->
+        <visual name="top_face">
+          <geometry>
+            <box><size>0.03 0.03 0.002</size></box>
+          </geometry>
+          <pose frame="">0 0 0.024 0 0 0</pose>
+          <material>
+            <ambient>0.0 0.8 0.2 1</ambient>
+            <diffuse>0.0 0.8 0.2 1</diffuse>
+          </material>
+        </visual>
+        <!-- White label strip -->
+        <visual name="tag_border">
+          <geometry>
+            <box><size>0.024 0.024 0.001</size></box>
+          </geometry>
+          <pose frame="">0 0 0.0255 0 0 0</pose>
+          <material>
+            <ambient>1 1 1 1</ambient>
+            <diffuse>1 1 1 1</diffuse>
+          </material>
+        </visual>
+        <!-- Black inner square -->
+        <visual name="tag_center">
+          <geometry>
+            <box><size>0.012 0.012 0.001</size></box>
+          </geometry>
+          <pose frame="">0 0 0.026 0 0 0</pose>
+          <material>
+            <ambient>0 0 0 1</ambient>
+            <diffuse>0 0 0 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
     <!-- Place goal marker — shows WHERE the arm will place the object.
          Matches PLACE_GOAL = [0.15, -0.10, 0.02] in pick_place.py.
          Static — does not move. -->
