@@ -117,10 +117,11 @@ HOME_Q        = None
 SIM_MODE      = False
 
 # ── Globals ───────────────────────────────────────────────────────────────────
-joints_pub      = None
-gripper_pub     = None
-tf_listener     = None
+joints_pub       = None
+gripper_pub      = None
+tf_listener      = None
 _last_used_pitch = PICK_PITCH
+DEBUG_EEF        = False
 
 
 # ============================================================
@@ -559,6 +560,35 @@ def sim_detach():
         pass
 
 
+def log_eef(label):
+    """Print current EEF xyz from FK. No-op unless ~debug_eef:=true."""
+    if not DEBUG_EEF:
+        return
+    try:
+        ok, _, pose = get_current_pose()
+        if ok:
+            rospy.loginfo("  EEF [%s]: x=%.4f  y=%.4f  z=%.4f",
+                          label, pose.position.x, pose.position.y, pose.position.z)
+        else:
+            rospy.logwarn("  EEF [%s]: FK returned failure", label)
+    except Exception as e:
+        rospy.logwarn("  EEF [%s]: FK call failed — %s", label, e)
+
+
+def _eef_logger_thread():
+    """Background thread: logs EEF pose at 1 Hz. Started only when debug_eef=true."""
+    rate = rospy.Rate(1)
+    while not rospy.is_shutdown():
+        try:
+            ok, _, pose = get_current_pose()
+            if ok:
+                rospy.loginfo("EEF: x=%.4f  y=%.4f  z=%.4f",
+                              pose.position.x, pose.position.y, pose.position.z)
+        except Exception:
+            pass
+        rate.sleep()
+
+
 # ============================================================
 # PICK / PLACE  — vertical-only sequences
 # A* handles all horizontal transits; these functions only move
@@ -583,6 +613,7 @@ def execute_pick_at(tag_pos, transit_z):
     """
     x, y, z = tag_pos
     rospy.loginfo("=== PICK ===  [%.4f, %.4f, %.4f]  transit_z=%.4f", x, y, z, transit_z)
+    log_eef("pick-start")
 
     # Pre-solve descent IK in sim before commanding (avoids PID drift during solve)
     grasp_pitch = PICK_PITCH
@@ -599,17 +630,20 @@ def execute_pick_at(tag_pos, transit_z):
                              duration=DURATION_FINE, no_fallback=True)
     if result is None:
         return False
+    log_eef("after-descend")
 
     # Grasp
     rospy.loginfo("Step 2: close gripper")
     set_gripper(GRIPPER_CLOSE)
     rospy.sleep(0.5)
     sim_attach()
+    log_eef("after-grasp")
 
     # Ascend back to transit height so A* transit 2 can start cleanly
     rospy.loginfo("Step 3: ascend → [%.4f, %.4f, %.4f]", x, y, transit_z)
     solve_and_move([x, y, transit_z], pitch=_last_used_pitch,
                    duration=DURATION_MOVE, no_fallback=True)
+    log_eef("after-ascend")
 
     rospy.loginfo("=== PICK COMPLETE ===")
     return True
@@ -623,6 +657,7 @@ def execute_place_at(goal_pos, transit_z):
     """
     x, y, z = goal_pos
     rospy.loginfo("=== PLACE ===  [%.4f, %.4f, %.4f]  transit_z=%.4f", x, y, z, transit_z)
+    log_eef("place-start")
 
     place_pitch = PICK_PITCH
     if SIM_MODE:
@@ -638,17 +673,20 @@ def execute_place_at(goal_pos, transit_z):
                              duration=DURATION_MOVE, no_fallback=SIM_MODE)
     if result is None:
         return False
+    log_eef("after-place-descend")
 
     # Release
     rospy.loginfo("Step 2: release")
     sim_detach()
     set_gripper(GRIPPER_OPEN)
     rospy.sleep(0.5)
+    log_eef("after-release")
 
     # Ascend back to transit height so A* transit 3 can start cleanly
     rospy.loginfo("Step 3: ascend → [%.4f, %.4f, %.4f]", x, y, transit_z)
     solve_and_move([x, y, transit_z], pitch=_last_used_pitch,
                    duration=DURATION_MOVE, no_fallback=True)
+    log_eef("after-place-ascend")
 
     rospy.loginfo("=== PLACE COMPLETE ===")
     return True
@@ -722,21 +760,55 @@ def collect_pose_samples(target_id, num_samples=NUM_SAMPLES, timeout=15.0):
 # TRANSIT EXECUTION
 # ============================================================
 
-def execute_transit(smoothed_waypoints, transit_z):
+def execute_transit(smoothed_waypoints, transit_z, pre_solved_pitch=None):
     """
     Move the EEF through all A* waypoints at fixed transit_z.
     Returns joint_trajectory: list of 5-element pulse lists (one per waypoint).
-    Waypoints where IK fails are skipped with a warning.
+
+    pre_solved_pitch: if provided, use this pitch for the first waypoint with
+    no_fallback=True (caller already ran dry_run before any servo commands).
+    If None and SIM_MODE, the internal pre-solve runs — acceptable for transits
+    2 and 3 where the arm is stable at transit_z after pick/place ascents.
     """
+    if not smoothed_waypoints:
+        return []
+
     joint_trajectory = []
     n = len(smoothed_waypoints)
+
+    # ── Resolve first-waypoint pitch ──────────────────────────────────────────
+    if pre_solved_pitch is not None:
+        # Pitch was pre-solved by caller before any servo commands — just use it
+        first_pitch       = pre_solved_pitch
+        first_no_fallback = True
+        rospy.loginfo("  Using pre-solved pitch=%.1f° for first waypoint", first_pitch)
+    elif SIM_MODE:
+        # Internal pre-solve (transits 2 & 3 — arm already stable at transit_z)
+        wx0, wy0 = smoothed_waypoints[0]
+        rospy.loginfo("SIM: pre-solving first transit waypoint [%.4f, %.4f, %.4f]...",
+                      wx0, wy0, transit_z)
+        pre = solve_and_move([wx0, wy0, transit_z], dry_run=True)
+        if pre is not None:
+            first_pitch       = _last_used_pitch
+            first_no_fallback = True
+            rospy.loginfo("  pre-solve done: pitch locked to %.1f°", first_pitch)
+        else:
+            rospy.logwarn("  pre-solve failed — proceeding with pitch fallback")
+            first_pitch, first_no_fallback = PICK_PITCH, False
+    else:
+        first_pitch, first_no_fallback = PICK_PITCH, False
+
     for i, (wx, wy) in enumerate(smoothed_waypoints):
         rospy.loginfo("Transit %d/%d → [%.4f, %.4f, %.4f]", i + 1, n, wx, wy, transit_z)
-        result = solve_and_move([wx, wy, transit_z], duration=DURATION_MOVE)
+        pitch       = first_pitch       if i == 0 else PICK_PITCH
+        no_fallback = first_no_fallback if i == 0 else False
+        result = solve_and_move([wx, wy, transit_z], pitch=pitch,
+                                duration=DURATION_MOVE, no_fallback=no_fallback)
         if result is None:
             rospy.logwarn("  IK failed for waypoint %d — skipping", i + 1)
             continue
         joint_trajectory.append(list(result[1][:5]))
+        log_eef(f"transit-wp{i + 1}")
     return joint_trajectory
 
 
@@ -775,6 +847,12 @@ def main():
     scan_duration  = rospy.get_param('~scan_duration', 3.0)
     pose_timeout   = rospy.get_param('~pose_timeout',  15.0)
 
+    # EEF debug logging — same pattern as pick_place.py
+    DEBUG_EEF = rospy.get_param('~debug_eef', False)
+    if DEBUG_EEF:
+        rospy.loginfo("debug_eef=True — EEF logging active (1 Hz background + step labels)")
+        threading.Thread(target=_eef_logger_thread, daemon=True).start()
+
     # TF listener
     tf_listener = tf.TransformListener()
     rospy.sleep(2.0)
@@ -789,6 +867,7 @@ def main():
     # ── Step 1: Go to home ────────────────────────────────────────────────────
     rospy.loginfo("Moving to home position...")
     go_home()
+    log_eef("home")
 
     # ── Step 2: Scan for all visible tags ─────────────────────────────────────
     rospy.loginfo("Scanning for visible tags (%.0fs)...", scan_duration)
@@ -882,39 +961,60 @@ def main():
         rospy.loginfo("Aborted by user.")
         return
 
-    # ── Step 9: Open gripper + neutral wrist before first transit ─────────────
+    # ── Step 9: Pre-solve transit 1 first waypoint BEFORE any servo commands ─
+    # In sim the pitch fallback loop takes ~5 s; running it while the arm is
+    # stationary at home prevents the PID sag that occurred when it ran after
+    # set_gripper/set_wrist had already disturbed the arm.
+    t1_first_pitch = PICK_PITCH
+    t1_no_fallback  = False
+    if SIM_MODE and smooth1:
+        rospy.loginfo("Pre-solving transit-1 first waypoint (dry run)...")
+        pre = solve_and_move([smooth1[0][0], smooth1[0][1], transit_z], dry_run=True)
+        if pre is not None:
+            t1_first_pitch = _last_used_pitch
+            t1_no_fallback  = True
+            rospy.loginfo("Pre-solve succeeded — pitch=%.1f°, no fallback needed for wp0",
+                          math.degrees(t1_first_pitch))
+        else:
+            rospy.logwarn("Pre-solve failed — will use default pitch with fallback")
+
+    # ── Step 10: Open gripper + neutral wrist AFTER pre-solve ─────────────────
     set_gripper(GRIPPER_OPEN)
     set_wrist(500)
 
-    # ── Step 10: TRANSIT 1 — home → above target ─────────────────────────────
+    # ── Step 11: TRANSIT 1 — home → above target ─────────────────────────────
     rospy.loginfo("=== TRANSIT 1: home → target (%d waypoints, z=%.4f) ===",
                   len(smooth1), transit_z)
-    jt1 = execute_transit(smooth1, transit_z)
+    jt1 = execute_transit(smooth1, transit_z, pre_solved_pitch=t1_first_pitch if t1_no_fallback else None)
+    log_eef("after-transit-1")
 
-    # ── Step 11: PICK (descend → grasp → ascend) ─────────────────────────────
+    # ── Step 12: PICK (descend → grasp → ascend) ─────────────────────────────
     pick_ok = execute_pick_at(target_pose, transit_z)
     if not pick_ok:
         rospy.logerr("Pick failed — aborting")
         go_home(keep_gripper=False)
         return
 
-    # ── Step 12: TRANSIT 2 — above target → above place goal ─────────────────
+    # ── Step 13: TRANSIT 2 — above target → above place goal ─────────────────
     rospy.loginfo("=== TRANSIT 2: target → place (%d waypoints, z=%.4f) ===",
                   len(smooth2), transit_z)
     jt2 = execute_transit(smooth2, transit_z)
+    log_eef("after-transit-2")
 
-    # ── Step 13: PLACE (descend → release → ascend) ───────────────────────────
+    # ── Step 14: PLACE (descend → release → ascend) ───────────────────────────
     execute_place_at(PLACE_GOAL, transit_z)
 
-    # ── Step 14: TRANSIT 3 — above place → home ──────────────────────────────
+    # ── Step 15: TRANSIT 3 — above place → home ──────────────────────────────
     rospy.loginfo("=== TRANSIT 3: place → home (%d waypoints, z=%.4f) ===",
                   len(smooth3), transit_z)
     jt3 = execute_transit(smooth3, transit_z)
+    log_eef("after-transit-3")
 
-    # ── Step 15: Final go_home to reset joint configuration ──────────────────
+    # ── Step 16: Final go_home to reset joint configuration ──────────────────
     go_home()
+    log_eef("final-home")
 
-    # ── Step 16: Plots ────────────────────────────────────────────────────────
+    # ── Step 17: Plots ────────────────────────────────────────────────────────
     all_jt = jt1 + jt2 + jt3
     plot_joint_space(all_jt)
 
@@ -943,7 +1043,7 @@ if __name__ == '__main__':
         start  = (0.10, 0.02)
         goal   = (0.22, 0.0)
         obs    = [(0.17, -0.06), (0.20, 0.10)]
-        radius = 0.07
+        radius = 0.01
 
         planner = AStarPlanner()
         planner.set_obstacles(obs, safety_radius=radius)

@@ -18,6 +18,7 @@
 
   <arg name="sim_mode"      default="true"/>
   <arg name="safety_radius" default="0.07"/>
+  <arg name="debug_eef"     default="false"/>
 
   <!-- Static TF: link5 → rgbd_cam_color_optical_frame (hardware only — sim has its own) -->
   <node unless="$(arg sim_mode)"
@@ -31,6 +32,7 @@
         required="true">
     <param name="sim_mode"      value="$(arg sim_mode)"/>
     <param name="safety_radius" value="$(arg safety_radius)"/>
+    <param name="debug_eef"     value="$(arg debug_eef)"/>
   </node>
 
 </launch>
