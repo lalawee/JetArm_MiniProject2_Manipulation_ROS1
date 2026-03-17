@@ -591,7 +591,7 @@ if __name__ == '__main__':
 
     # Load target tag ID from rosparam (default: 1)
     TARGET_TAG_ID = rospy.get_param('~target_tag_id', TARGET_TAG_ID)
-    rospy.loginfo("Target AprilTag ID: %d", TARGET_TAG_ID)
+    rospy.loginfo("Default Target AprilTag ID: %d", TARGET_TAG_ID)
 
     # Publishers — matching grasp_trajectory.py pattern
     joints_pub = rospy.Publisher('/controllers/multi_id_pos_dur', MultiRawIdPosDur, queue_size=1)
@@ -622,9 +622,6 @@ if __name__ == '__main__':
         sub.unregister()
         return sorted(seen)
 
-    # Subscribe to object poses (used by object_pose_callback during pick loop)
-    rospy.Subscriber('/jetarm/object_poses', String, object_pose_callback)
-
     while not rospy.is_shutdown():
         # ── Scan to find what tags are visible ───────────────────────────────
         rospy.loginfo("Scanning for visible tags (%.0fs)...", SCAN_DURATION)
@@ -654,11 +651,14 @@ if __name__ == '__main__':
             rospy.logerr("Tag ID %d not visible — exiting.", TARGET_TAG_ID)
             break
 
-        # ── Wait for averaged pose of chosen tag ─────────────────────────────
+        # ── Subscribe, collect samples, then unsubscribe ─────────────────────
         pose_samples = []
         object_pose  = None
         rospy.loginfo("Collecting %d samples for tag ID %d (timeout: %.0fs)...",
                       NUM_SAMPLES, TARGET_TAG_ID, POSE_TIMEOUT)
+
+        pose_sub = rospy.Subscriber('/jetarm/object_poses', String,
+                                    object_pose_callback, queue_size=5)
 
         rate = rospy.Rate(10)
         deadline = rospy.Time.now() + rospy.Duration(POSE_TIMEOUT)
@@ -666,6 +666,8 @@ if __name__ == '__main__':
             if rospy.Time.now() > deadline:
                 break
             rate.sleep()
+
+        pose_sub.unregister()
 
         if object_pose is None:
             rospy.logerr("Failed to collect pose for tag ID %d — exiting.", TARGET_TAG_ID)
