@@ -15,10 +15,13 @@ from std_msgs.msg import Float64
 from gazebo_msgs.msg import ModelState
 from gazebo_msgs.srv import SetModelState
 
-# ── Cube home position (matches world file spawn pose) ──────────────────────
-CUBE_MODEL  = 'apriltag_cube'
-CUBE_POSE   = {'x': 0.22, 'y': 0.00, 'z': 0.025,
-               'rx': 0.0,  'ry': 0.0, 'rz': 0.0, 'rw': 1.0}
+# ── Cube home positions (matches world file spawn poses) ────────────────────
+CUBES = [
+    ('apriltag_cube',   {'x': 0.22, 'y': 0.00, 'z': 0.025,
+                         'rx': 0.0, 'ry': 0.0, 'rz': 0.0, 'rw': 1.0}),
+    ('apriltag_cube_2', {'x': 0.20, 'y': 0.10, 'z': 0.025,
+                         'rx': 0.0, 'ry': 0.0, 'rz': 0.0, 'rw': 1.0}),
+]
 
 # ── Arm start pose (matches joint_initializer TARGET_Q) ─────────────────────
 TARGET_Q     = [0.09, 0.21, -2.1, -0.67, -0.12]
@@ -33,31 +36,32 @@ def reset_cube():
     rospy.wait_for_service('/gazebo/set_model_state', timeout=5.0)
     set_state = rospy.ServiceProxy('/gazebo/set_model_state', SetModelState)
 
-    state = ModelState()
-    state.model_name      = CUBE_MODEL
-    state.reference_frame = 'world'
+    for model_name, pose in CUBES:
+        state = ModelState()
+        state.model_name      = model_name
+        state.reference_frame = 'world'
 
-    state.pose.position.x    = CUBE_POSE['x']
-    state.pose.position.y    = CUBE_POSE['y']
-    state.pose.position.z    = CUBE_POSE['z']
-    state.pose.orientation.x = CUBE_POSE['rx']
-    state.pose.orientation.y = CUBE_POSE['ry']
-    state.pose.orientation.z = CUBE_POSE['rz']
-    state.pose.orientation.w = CUBE_POSE['rw']
+        state.pose.position.x    = pose['x']
+        state.pose.position.y    = pose['y']
+        state.pose.position.z    = pose['z']
+        state.pose.orientation.x = pose['rx']
+        state.pose.orientation.y = pose['ry']
+        state.pose.orientation.z = pose['rz']
+        state.pose.orientation.w = pose['rw']
 
-    # Zero velocity so cube doesn't drift after teleport
-    state.twist.linear.x  = 0.0
-    state.twist.linear.y  = 0.0
-    state.twist.linear.z  = 0.0
-    state.twist.angular.x = 0.0
-    state.twist.angular.y = 0.0
-    state.twist.angular.z = 0.0
+        # Zero velocity so cube doesn't drift after teleport
+        state.twist.linear.x  = 0.0
+        state.twist.linear.y  = 0.0
+        state.twist.linear.z  = 0.0
+        state.twist.angular.x = 0.0
+        state.twist.angular.y = 0.0
+        state.twist.angular.z = 0.0
 
-    resp = set_state(state)
-    if resp.success:
-        rospy.loginfo("sim_reset: cube teleported to home position")
-    else:
-        rospy.logwarn("sim_reset: cube reset failed — %s", resp.status_message)
+        resp = set_state(state)
+        if resp.success:
+            rospy.loginfo("sim_reset: '%s' teleported to home position", model_name)
+        else:
+            rospy.logwarn("sim_reset: '%s' reset failed — %s", model_name, resp.status_message)
 
 
 def reset_arm():

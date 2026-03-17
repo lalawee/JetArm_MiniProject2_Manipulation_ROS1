@@ -16,8 +16,9 @@
       roslaunch hiwonder_grasp pick_place.launch
   -->
 
-  <arg name="sim_mode"      default="false"/>
+  <arg name="sim_mode"      default="true"/>
   <arg name="target_tag_id" default="1"/>
+  <arg name="debug_eef"     default="false"/>
 
   <!-- Static TF: link5 → rgbd_cam_color_optical_frame (hardware only — sim has its own) -->
   <node unless="$(arg sim_mode)"
@@ -31,6 +32,7 @@
         required="true">
     <param name="sim_mode"      value="$(arg sim_mode)"/>
     <param name="target_tag_id" value="$(arg target_tag_id)"/>
+    <param name="debug_eef"     value="$(arg debug_eef)"/>
   </node>
 
 </launch>

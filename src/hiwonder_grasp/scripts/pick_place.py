@@ -18,10 +18,11 @@ import rospy
 import json
 import math
 import numpy as np
+import threading
 from std_msgs.msg import String
 from hiwonder_interfaces.msg import MultiRawIdPosDur, RawIdPosDur
 from jetarm_sdk import bus_servo_control, gripper_control
-from jetarm_kinematics.kinematics_control import set_pose_target
+from jetarm_kinematics.kinematics_control import set_pose_target, get_current_pose
 import jetarm_kinematics.transform as transform
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -36,7 +37,7 @@ from std_srvs.srv import Trigger
 
 _SIM_CONFIG = {
     # Place goal (base frame [x, y, z])
-    'PLACE_GOAL':     [0.137, -0.146, 0.001],
+    'PLACE_GOAL':     [0.005, -0.148, 0.001],
 
     # EEF calibration: compensates IK model vs Gazebo geometry mismatch (~1.5 cm in +x)
     'EEF_OFFSET_X':   0.015,
@@ -45,7 +46,7 @@ _SIM_CONFIG = {
 
     # Approach heights (metres relative to tag centre)
     'APPROACH_HIGH':  0.04,
-    'APPROACH_LOW':   -0.02,
+    'APPROACH_LOW':   0.04,
     'GRASP_Z_BELOW':  0.02,
 
     # Mid-transit waypoint — prevents full-extension swing between pick and place
@@ -123,6 +124,7 @@ pose_samples = []
 object_pose = None   # averaged [x, y, z] once ready
 joints_pub = None
 gripper_pub = None
+DEBUG_EEF = False    # set via ~debug_eef param in launch file
 
 
 # ============================================================
@@ -190,12 +192,51 @@ def camera_to_base(tag_xyz):
         return None
 
 
-def solve_and_move(coord, pitch=PICK_PITCH, duration=DURATION_MOVE):
+_last_used_pitch = PICK_PITCH   # tracks the pitch accepted on the previous solve_and_move call
+
+
+def check_reachability(coord, label, pitch=PICK_PITCH):
+    """
+    Dry-run IK for coord — no servos commanded.
+    Prints best manipulability w across all pitch fallbacks so you can
+    see upfront whether the target is reachable before committing to a move.
+    """
+    corrected = [coord[0] - EEF_OFFSET_X,
+                 coord[1] - EEF_OFFSET_Y,
+                 coord[2] - EEF_OFFSET_Z]
+    best_w, best_pitch = -1.0, pitch
+    for offset in PITCH_FALLBACKS:
+        try_pitch = pitch + offset
+        result = set_pose_target(corrected, try_pitch, YAW_RANGE, 1)
+        if result is None or result[1] == []:
+            continue
+        try:
+            q = list(transform.pulse2angle(result[1][:5]))
+        except Exception:
+            continue
+        w = manipulability(q)
+        if w > best_w:
+            best_w, best_pitch = w, try_pitch
+        if w >= SINGULARITY_THRESHOLD:
+            break
+    status = "OK" if best_w >= SINGULARITY_THRESHOLD else "NEAR-SINGULAR"
+    rospy.loginfo("  REACHABILITY [%s] target=%s  best_w=%.5f  best_pitch=%.1f°  [%s]",
+                  label, [round(c, 4) for c in coord], best_w, best_pitch, status)
+
+
+def solve_and_move(coord, pitch=PICK_PITCH, duration=DURATION_MOVE, no_fallback=False,
+                   dry_run=False):
     """
     Call set_pose_target to get pulse values, check for singularity,
     retry with pitch perturbations if needed, then command servos 1-4.
     Returns the IK result, or None if no valid solution found.
+
+    no_fallback=True: try only the given pitch (no ±offset attempts).
+    Use this to keep the same arm configuration between consecutive waypoints.
+    dry_run=True: find the best IK solution and record _last_used_pitch but do NOT
+    command any servos. Use to pre-solve IK before motion starts.
     """
+    global _last_used_pitch
     # Apply EEF calibration correction before solving IK
     corrected = [coord[0] - EEF_OFFSET_X,
                  coord[1] - EEF_OFFSET_Y,
@@ -205,7 +246,8 @@ def solve_and_move(coord, pitch=PICK_PITCH, duration=DURATION_MOVE):
     best_w       = -1.0
     best_pitch   = pitch
 
-    for offset in PITCH_FALLBACKS:
+    fallbacks = [0] if no_fallback else PITCH_FALLBACKS
+    for offset in fallbacks:
         try_pitch = pitch + offset
         result = set_pose_target(corrected, try_pitch, YAW_RANGE, 1)
 
@@ -239,12 +281,19 @@ def solve_and_move(coord, pitch=PICK_PITCH, duration=DURATION_MOVE):
         rospy.logwarn("IK failed for coord=%s (all pitch offsets tried)", coord)
         return None
 
+    _last_used_pitch = best_pitch
+
     if best_w < SINGULARITY_THRESHOLD:
         rospy.logwarn("  Near-singularity warning: best w=%.5f < threshold=%.5f "
                       "(pitch=%.1f°) — proceeding with best available solution",
                       best_w, SINGULARITY_THRESHOLD, best_pitch)
     else:
         rospy.loginfo("  Accepted: pitch=%.1f°  w=%.5f", best_pitch, best_w)
+
+    if dry_run:
+        rospy.loginfo("  dry_run=True — IK solved, pitch locked to %.1f°, no servos commanded",
+                      best_pitch)
+        return best_result
 
     servo_data = best_result[1]
     rospy.loginfo("  IK solution (pulses): %s", servo_data)
@@ -264,6 +313,35 @@ def set_gripper(position, duration=None):
     dur = int(DURATION_GRIP if duration is None else duration)
     gripper_control.set_grasp(gripper_pub, dur, position)
     rospy.sleep(dur / 1000.0 + 0.3)
+
+
+def log_eef(label):
+    """Print current EEF xyz from FK service. No-op unless ~debug_eef is true."""
+    if not DEBUG_EEF:
+        return
+    try:
+        ok, _, pose = get_current_pose()
+        if ok:
+            rospy.loginfo("  EEF [%s]: x=%.4f  y=%.4f  z=%.4f",
+                          label, pose.position.x, pose.position.y, pose.position.z)
+        else:
+            rospy.logwarn("  EEF [%s]: FK call returned failure", label)
+    except Exception as e:
+        rospy.logwarn("  EEF [%s]: FK call failed — %s", label, e)
+
+
+def _eef_logger_thread():
+    """Background thread: logs EEF pose every second. Only started when ~debug_eef is true."""
+    rate = rospy.Rate(1)
+    while not rospy.is_shutdown():
+        try:
+            ok, _, pose = get_current_pose()
+            if ok:
+                rospy.loginfo("EEF: x=%.4f  y=%.4f  z=%.4f",
+                              pose.position.x, pose.position.y, pose.position.z)
+        except Exception:
+            pass
+        rate.sleep()
 
 
 def set_wrist(angle_pulse=500, duration=500):
@@ -324,33 +402,59 @@ def execute_pick(tag_pos):
 
     rospy.loginfo("=== PICK SEQUENCE START ===")
     rospy.loginfo("Tag position (base): [%.4f, %.4f, %.4f]", x, y, z)
+    log_eef("pick-start")
+
+    # In simulation: pre-solve IK BEFORE step 0 to eliminate the fallback-loop
+    # drift window (Gazebo PID can cause the arm to sag during 5s of IK calls).
+    # On hardware: arm holds position rigidly, so pre-solve is unnecessary overhead.
+    check_reachability([x, y, z + APPROACH_HIGH], "approach")
+    check_reachability([x, y, z - GRASP_Z_BELOW], "grasp")
+    approach_pitch = PICK_PITCH
+    if SIM_MODE:
+        rospy.loginfo("SIM: Pre-solving approach IK before step 0...")
+        pre_result = solve_and_move([x, y, z + APPROACH_HIGH], dry_run=True)
+        if pre_result is None:
+            rospy.logerr("Pre-solve failed for approach target — aborting pick")
+            return False
+        approach_pitch = _last_used_pitch
+        rospy.loginfo("Pre-solve done: approach pitch=%.1f°", approach_pitch)
 
     # Step 0 — Open gripper + neutral wrist
     rospy.loginfo("Step 0: Open gripper, neutral wrist")
     set_gripper(GRIPPER_OPEN)
     set_wrist(500)
+    log_eef("after-step0")
 
     # Step 1 — Pre-grasp approach
-    rospy.loginfo("Step 1: Approach (%.2fm above tag)", APPROACH_LOW)
-    result = solve_and_move([x, y, z + APPROACH_LOW], duration=DURATION_MOVE)
+    rospy.loginfo("Step 1: Approach (%.2fm above tag) → target [%.4f, %.4f, %.4f]",
+                  APPROACH_HIGH, x, y, z + APPROACH_HIGH)
+    result = solve_and_move([x, y, z + APPROACH_HIGH], pitch=approach_pitch,
+                             duration=DURATION_MOVE, no_fallback=SIM_MODE)
     if result is None:
         return False
+    log_eef("after-step1-approach")
 
-    # Step 2 — Descend to grasp height (below tag to wrap around object)
-    rospy.loginfo("Step 2: Descend to grasp (%.3fm below tag)", GRASP_Z_BELOW)
-    result = solve_and_move([x, y, z - GRASP_Z_BELOW], duration=DURATION_FINE)
+    # Step 2 — Descend to grasp height
+    # Force the same pitch as Step 1 so the IK stays in the same arm configuration
+    rospy.loginfo("Step 2: Descend to grasp (%.3fm below tag) → target [%.4f, %.4f, %.4f]",
+                  GRASP_Z_BELOW, x, y, z - GRASP_Z_BELOW)
+    result = solve_and_move([x, y, z - GRASP_Z_BELOW], pitch=_last_used_pitch,
+                             duration=DURATION_FINE, no_fallback=True)
     if result is None:
         return False
+    log_eef("after-step2-grasp")
 
     # Step 3 — Close gripper
     rospy.loginfo("Step 3: Closing gripper")
     set_gripper(GRIPPER_CLOSE)
     rospy.sleep(0.5)
     sim_attach()   # lock cube to EEF in simulation
+    log_eef("after-step3-grip")
 
     # Step 4 — Retract to home position (gripper stays closed)
     rospy.loginfo("Step 4: Retract to home position")
     go_home(duration=DURATION_MOVE, keep_gripper=True)
+    log_eef("after-step4-home")
 
     rospy.loginfo("=== PICK COMPLETE ===")
     return True
@@ -369,21 +473,46 @@ def execute_place(goal_pos):
     rospy.loginfo("=== PLACE SEQUENCE START ===")
     rospy.loginfo("Goal position (base): [%.4f, %.4f, %.4f]", x, y, z)
 
-    # Step 1 — Move directly to place height
-    rospy.loginfo("Step 1: Move to place height")
-    result = solve_and_move([x, y, z], duration=DURATION_MOVE)
+    check_reachability([x, y, z], "place-goal")
+    place_pitch = PICK_PITCH
+    if SIM_MODE:
+        rospy.loginfo("SIM: Pre-solving place IK...")
+        pre_result = solve_and_move([x, y, z], dry_run=True)
+        if pre_result is None:
+            rospy.logerr("Pre-solve failed for place goal — aborting place")
+            return False
+        place_pitch = _last_used_pitch
+        rospy.loginfo("Pre-solve done: place pitch=%.1f°", place_pitch)
+    log_eef("place-start")
+
+    # Step 1 — Transit waypoint (if configured) to avoid arm swinging wildly
+    if TRANSIT_POS is not None:
+        rospy.loginfo("Step 1a: Transit waypoint → [%.4f, %.4f, %.4f]", *TRANSIT_POS)
+        result = solve_and_move(TRANSIT_POS, duration=DURATION_MOVE)
+        if result is None:
+            rospy.logwarn("Transit waypoint IK failed — skipping transit")
+        else:
+            log_eef("after-transit")
+
+    # Step 1b — Move to place height
+    rospy.loginfo("Step 1b: Move to place height → target [%.4f, %.4f, %.4f]", x, y, z)
+    result = solve_and_move([x, y, z], pitch=place_pitch,
+                             duration=DURATION_MOVE, no_fallback=SIM_MODE)
     if result is None:
         return False
+    log_eef("after-place-step1")
 
     # Step 2 — Release
     rospy.loginfo("Step 2: Opening gripper — releasing object")
     sim_detach()   # release cube from EEF in simulation
     set_gripper(GRIPPER_OPEN)
     rospy.sleep(0.5)
+    log_eef("after-place-step2-release")
 
     # Step 3 — Retract to home
     rospy.loginfo("Step 3: Retract to home")
     go_home(duration=DURATION_MOVE)
+    log_eef("after-place-step3-home")
 
     rospy.loginfo("=== PLACE COMPLETE ===")
     return True
@@ -454,6 +583,12 @@ if __name__ == '__main__':
     tf_listener = tf.TransformListener()
     rospy.sleep(2.0)  # give TF buffer time to fill
 
+    # Start background EEF logger only when debug_eef is enabled
+    DEBUG_EEF = rospy.get_param('~debug_eef', False)
+    if DEBUG_EEF:
+        rospy.loginfo("debug_eef=True — EEF logging active (1 Hz + step labels)")
+        threading.Thread(target=_eef_logger_thread, daemon=True).start()
+
     # Load target tag ID from rosparam (default: 1)
     TARGET_TAG_ID = rospy.get_param('~target_tag_id', TARGET_TAG_ID)
     rospy.loginfo("Target AprilTag ID: %d", TARGET_TAG_ID)
@@ -468,39 +603,39 @@ if __name__ == '__main__':
     # Move to home/overview position before doing anything
     go_home()
 
-    # Subscribe to object poses
+    POSE_TIMEOUT = rospy.get_param('~pose_timeout', 15.0)   # seconds
+    SCAN_DURATION = rospy.get_param('~scan_duration', 3.0)  # seconds
+
+    # ── Scan helper — collect all visible tag IDs from the topic ─────────────
+    def scan_for_tags():
+        """Listen to /jetarm/object_poses for SCAN_DURATION seconds.
+        Returns sorted list of visible tag IDs."""
+        seen = set()
+        def _cb(msg):
+            try:
+                for tid, _ in parse_tags(msg.data):
+                    seen.add(tid)
+            except Exception:
+                pass
+        sub = rospy.Subscriber('/jetarm/object_poses', String, _cb, queue_size=5)
+        rospy.sleep(SCAN_DURATION)
+        sub.unregister()
+        return sorted(seen)
+
+    # Subscribe to object poses (used by object_pose_callback during pick loop)
     rospy.Subscriber('/jetarm/object_poses', String, object_pose_callback)
 
-    POSE_TIMEOUT = rospy.get_param('~pose_timeout', 15.0)  # seconds
-
     while not rospy.is_shutdown():
-        # Reset state for this iteration
-        pose_samples = []
-        object_pose  = None
+        # ── Scan to find what tags are visible ───────────────────────────────
+        rospy.loginfo("Scanning for visible tags (%.0fs)...", SCAN_DURATION)
+        visible = scan_for_tags()
 
-        rospy.loginfo("Waiting for tag ID %d (timeout: %.0fs)...", TARGET_TAG_ID, POSE_TIMEOUT)
-
-        # Wait for enough pose samples or timeout
-        rate = rospy.Rate(10)
-        deadline = rospy.Time.now() + rospy.Duration(POSE_TIMEOUT)
-        while not rospy.is_shutdown() and object_pose is None:
-            if rospy.Time.now() > deadline:
-                break
-            rate.sleep()
-
-        if object_pose is None:
-            rospy.logerr("Tag ID %d not found within %.0fs — exiting.",
-                         TARGET_TAG_ID, POSE_TIMEOUT)
+        if not visible:
+            rospy.logerr("No tags visible — exiting.")
             break
 
-        # Execute pick & place
-        pick_ok = execute_pick(object_pose)
-        if pick_ok:
-            execute_place(PLACE_GOAL)
-
-        # Prompt user for next action
-        print("\n--- Pick & place complete ---")
-        print("Enter a tag ID to pick next object, or press Enter to exit: ", end='', flush=True)
+        print("\nVisible tag IDs: %s" % visible)
+        print("Enter tag ID to pick (or Enter to exit): ", end='', flush=True)
         try:
             user_input = input().strip()
         except (EOFError, KeyboardInterrupt):
@@ -511,9 +646,34 @@ if __name__ == '__main__':
 
         try:
             TARGET_TAG_ID = int(user_input)
-            rospy.loginfo("Next target: tag ID %d", TARGET_TAG_ID)
         except ValueError:
             rospy.logwarn("Invalid tag ID '%s' — exiting.", user_input)
             break
+
+        if TARGET_TAG_ID not in visible:
+            rospy.logerr("Tag ID %d not visible — exiting.", TARGET_TAG_ID)
+            break
+
+        # ── Wait for averaged pose of chosen tag ─────────────────────────────
+        pose_samples = []
+        object_pose  = None
+        rospy.loginfo("Collecting %d samples for tag ID %d (timeout: %.0fs)...",
+                      NUM_SAMPLES, TARGET_TAG_ID, POSE_TIMEOUT)
+
+        rate = rospy.Rate(10)
+        deadline = rospy.Time.now() + rospy.Duration(POSE_TIMEOUT)
+        while not rospy.is_shutdown() and object_pose is None:
+            if rospy.Time.now() > deadline:
+                break
+            rate.sleep()
+
+        if object_pose is None:
+            rospy.logerr("Failed to collect pose for tag ID %d — exiting.", TARGET_TAG_ID)
+            break
+
+        # ── Execute pick & place ──────────────────────────────────────────────
+        pick_ok = execute_pick(object_pose)
+        if pick_ok:
+            execute_place(PLACE_GOAL)
 
     rospy.loginfo("Done.")

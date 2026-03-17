@@ -85,7 +85,7 @@ class SimGraspNode:
     def _move_cube(self, pos, quat):
         """Teleport the cube to pos/quat in world frame."""
         state = ModelState()
-        state.model_name = CUBE_MODEL
+        state.model_name = self._active_cube
         state.reference_frame = 'world'
         state.pose.position.x = float(pos[0])
         state.pose.position.y = float(pos[1])
