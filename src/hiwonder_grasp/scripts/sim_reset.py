@@ -21,6 +21,8 @@ CUBES = [
                          'rx': 0.0, 'ry': 0.0, 'rz': 0.0, 'rw': 1.0}),
     ('apriltag_cube_2', {'x': 0.20, 'y': 0.10, 'z': 0.025,
                          'rx': 0.0, 'ry': 0.0, 'rz': 0.0, 'rw': 1.0}),
+    ('apriltag_cube_3', {'x': 0.17, 'y': -0.06, 'z': 0.025,
+                         'rx': 0.0, 'ry': 0.0, 'rz': 0.0, 'rw': 1.0}),
 ]
 
 # ── Arm start pose (matches joint_initializer TARGET_Q) ─────────────────────

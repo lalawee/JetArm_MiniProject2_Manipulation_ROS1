@@ -140,8 +140,9 @@ class AStarPlanner:
         self.y_min, self.y_max = y_bounds
         self.nx    = int(round((self.x_max - self.x_min) / self.res)) + 1
         self.ny    = int(round((self.y_max - self.y_min) / self.res)) + 1
-        self.obstacle_grid = np.zeros((self.nx, self.ny), dtype=bool)
-        self.obstacles     = []   # [(x, y)] stored for plotting
+        self.obstacle_grid       = np.zeros((self.nx, self.ny), dtype=bool)
+        self.obstacles           = []   # [(x, y)] stored for plotting
+        self._last_safety_radius = OBSTACLE_SAFETY_RADIUS
 
     # ── coordinate conversion ─────────────────────────────────────────────────
 
@@ -162,6 +163,7 @@ class AStarPlanner:
     def set_obstacles(self, obstacle_positions, safety_radius=OBSTACLE_SAFETY_RADIUS):
         """Mark cells within safety_radius of each obstacle centre as blocked."""
         self.obstacles = list(obstacle_positions)
+        self._last_safety_radius = safety_radius
         r_cells = int(math.ceil(safety_radius / self.res))
         for ox, oy in obstacle_positions:
             ogx, ogy = self._xy_to_grid(ox, oy)
@@ -210,9 +212,11 @@ class AStarPlanner:
                 if found:
                     break
 
-        # Clear a 2 cm radius around start — the arm is physically already there,
-        # so this region is not truly blocked regardless of obstacle proximity.
-        clear_r = int(math.ceil(0.02 / self.res))  # 2 cm = 4 cells at 5 mm/cell
+        # Clear a full safety_radius bubble around start — the arm is physically
+        # already there, so no collision is possible regardless of obstacle proximity.
+        # This ensures A* can always escape from the home position even if an obstacle
+        # tag happens to be nearby.
+        clear_r = int(math.ceil(self._last_safety_radius / self.res))
         cleared_cells = []
         for dx in range(-clear_r, clear_r + 1):
             for dy in range(-clear_r, clear_r + 1):

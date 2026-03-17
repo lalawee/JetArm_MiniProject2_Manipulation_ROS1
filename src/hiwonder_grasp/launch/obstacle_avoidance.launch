@@ -1,0 +1,36 @@
+<launch>
+  <!--
+    obstacle_avoidance.launch
+    =========================
+    Runs the Challenge 2 obstacle avoidance node.
+
+    Arguments:
+      sim_mode       — true  : simulation (Gazebo) mode
+                       false : real hardware mode  (default)
+      safety_radius  — obstacle exclusion radius in metres  (default: 0.07)
+
+    Simulation usage (run AFTER sim_pick_place.launch is fully up):
+      roslaunch hiwonder_grasp obstacle_avoidance.launch sim_mode:=true
+
+    Hardware usage:
+      roslaunch hiwonder_grasp obstacle_avoidance.launch
+  -->
+
+  <arg name="sim_mode"      default="true"/>
+  <arg name="safety_radius" default="0.07"/>
+
+  <!-- Static TF: link5 → rgbd_cam_color_optical_frame (hardware only — sim has its own) -->
+  <node unless="$(arg sim_mode)"
+        pkg="tf" type="static_transform_publisher" name="eef_to_camera_transform"
+        args="-0.045 0.0 0.02 -1.57 0 0 link5 rgbd_cam_color_optical_frame 100"/>
+
+  <node name="obstacle_avoidance"
+        pkg="hiwonder_grasp"
+        type="obstacle_avoidance.py"
+        output="screen"
+        required="true">
+    <param name="sim_mode"      value="$(arg sim_mode)"/>
+    <param name="safety_radius" value="$(arg safety_radius)"/>
+  </node>
+
+</launch>
