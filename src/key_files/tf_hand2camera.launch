@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<launch>  
+  <node pkg="tf" type="static_transform_publisher" name="eef_to_camera_transform" args="-0.045 0.0 0.02 -1.57 0 0 link5 rgbd_cam_color_optical_frame 100"/>
+
+</launch>

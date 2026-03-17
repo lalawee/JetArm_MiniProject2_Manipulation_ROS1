@@ -8,30 +8,57 @@ jetarm:
     joint1_position_controller:
         type: effort_controllers/JointPositionController
         joint: joint1
-        pid: {p: 1350.0, i: 0.0006, d: 170.0, i_clamp_min: -1000.0, i_clamp_max: 1000.0}
+        pid: {p: 3000.0, i: 0.0001, d: 10000.0, i_clamp_min: -1000.0, i_clamp_max: 1000.0}
 
     joint2_position_controller:
         type: effort_controllers/JointPositionController
         joint: joint2
-        pid: {p: 1350.0, i: 0.0006, d: 170.0, i_clamp_min: -1000.0, i_clamp_max: 1000.0}
+        pid: {p: 3000.0, i: 0.0001, d: 10000.0, i_clamp_min: -1000.0, i_clamp_max: 1000.0}
 
     joint3_position_controller:
         type: effort_controllers/JointPositionController
         joint: joint3
-        pid: {p: 1350.0, i: 0.0006, d: 170.0, i_clamp_min: -1000.0, i_clamp_max: 1000.0}
+        pid: {p: 3000.0, i: 0.0001, d: 10000.0, i_clamp_min: -1000.0, i_clamp_max: 1000.0}
 
     joint4_position_controller:
         type: effort_controllers/JointPositionController
         joint: joint4
-        pid: {p: 1350.0, i: 0.0006, d: 170.0, i_clamp_min: -1000.0, i_clamp_max: 1000.0}
+        pid: {p: 3000.0, i: 0.0001, d: 10000.0, i_clamp_min: -1000.0, i_clamp_max: 1000.0}
 
     joint5_position_controller:
         type: effort_controllers/JointPositionController
         joint: joint5
-        pid: {p: 1350.0, i: 0.0006, d: 170.0, i_clamp_min: -1000.0, i_clamp_max: 1000.0}
+        pid: {p: 3000.0, i: 0.0001, d: 10000.0, i_clamp_min: -1000.0, i_clamp_max: 1000.0}
 
     r_joint_position_controller:
         type: effort_controllers/JointPositionController
         joint: r_joint
-        pid: {p: 1350.0, i: 0.0006, d: 170.0, i_clamp_min: -1000.0, i_clamp_max: 1000.0}
+        pid: {p: 200.0, i: 0.0, d: 8.0, i_clamp_min: -50.0, i_clamp_max: 50.0}
+
+# Mimic joint controllers — driven by gripper_mimic_node.py
+# Gazebo ignores <mimic> tags natively; these controllers enforce them.
+    l_joint_position_controller:
+        type: effort_controllers/JointPositionController
+        joint: l_joint
+        pid: {p: 5.0, i: 0.0, d: 1.0, i_clamp_min: -10.0, i_clamp_max: 10.0}
+
+    r_in_joint_position_controller:
+        type: effort_controllers/JointPositionController
+        joint: r_in_joint
+        pid: {p: 5.0, i: 0.0, d: 1.0, i_clamp_min: -10.0, i_clamp_max: 10.0}
+
+    r_out_joint_position_controller:
+        type: effort_controllers/JointPositionController
+        joint: r_out_joint
+        pid: {p: 5.0, i: 0.0, d: 1.0, i_clamp_min: -10.0, i_clamp_max: 10.0}
+
+    l_in_joint_position_controller:
+        type: effort_controllers/JointPositionController
+        joint: l_in_joint
+        pid: {p: 5.0, i: 0.0, d: 1.0, i_clamp_min: -10.0, i_clamp_max: 10.0}
+
+    l_out_joint_position_controller:
+        type: effort_controllers/JointPositionController
+        joint: l_out_joint
+        pid: {p: 5.0, i: 0.0, d: 1.0, i_clamp_min: -10.0, i_clamp_max: 10.0}
 

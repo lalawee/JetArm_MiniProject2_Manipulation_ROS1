@@ -1,0 +1,142 @@
+<!--
+  sim_pick_place.launch
+  =====================
+  Full simulation stack for validating Challenge 1: Pick & Place.
+
+  What this launches:
+    1. Gazebo with pick_place_sim.world (arm workspace + draggable AprilTag cube)
+    2. Robot URDF spawner
+    3. Gazebo joint controllers (joints 1-5 + gripper)
+    4. robot_state_publisher  → TF for all arm joints
+    5. tf_hand2camera         → static TF: link5 → rgbd_cam_color_optical_frame
+    6. kinematics_node_6dof   → /kinematics/set_pose_target IK service
+    7. servo_bridge           → translates /controllers/* → /jetarm/*_controller/command
+    8. sim_tag_publisher      → reads Gazebo model position → /jetarm/object_poses
+
+  Run pick_place.py separately (AFTER this launch file is fully up):
+    rosrun hiwonder_grasp pick_place.py
+
+  To test a new pick position:
+    1. In Gazebo press T (translate tool) and drag the apriltag_cube
+    2. Re-run:  rosrun hiwonder_grasp pick_place.py
+-->
+
+<launch>
+  <!-- ─── Gazebo ──────────────────────────────────────────────────────────── -->
+  <arg name="gui"          default="true"/>
+  <arg name="paused"       default="false"/>
+  <arg name="use_sim_time" default="true"/>
+
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="world_name"    value="$(find jetarm_6dof_gazebo)/worlds/pick_place_sim.world"/>
+    <arg name="gui"           value="$(arg gui)"/>
+    <arg name="paused"        value="$(arg paused)"/>
+    <arg name="use_sim_time"  value="$(arg use_sim_time)"/>
+    <arg name="headless"      value="false"/>
+    <arg name="debug"         value="false"/>
+  </include>
+
+  <!-- ─── Robot URDF ─────────────────────────────────────────────────────── -->
+  <param name="robot_description"
+         command="$(find xacro)/xacro --inorder
+                  '$(find jetarm_6dof_description)/urdf/jetarm_6dof_robot.urdf.xacro'"/>
+
+  <!--
+    Spawn the robot at all-zero joints (arm pointing straight up — away from
+    the workspace).  The -J teleport hack fires AFTER controllers start and
+    causes a sudden joint jump that makes the arm swing through the cube.
+    Instead, joint_initializer moves the arm to the desired start pose
+    smoothly as soon as the controllers come online.
+  -->
+  <node name="urdf_spawner"
+        pkg="gazebo_ros"
+        type="spawn_model"
+        respawn="false"
+        output="screen"
+        args="-urdf -model jetarm -param robot_description"/>
+
+  <!-- ─── Gazebo joint controllers ───────────────────────────────────────── -->
+  <include file="$(find jetarm_6dof_gazebo)/launch/jetarm_6dof_controller.launch"/>
+
+  <!-- ─── Static TF: link5 → camera frame ────────────────────────────────── -->
+  <!--
+    Publishes: link5 → rgbd_cam_color_optical_frame
+    Translation: (-0.045, 0.0, 0.02) m   Rotation: (-1.57, 0, 0) rad (RPY)
+    Required for sim_tag_publisher to transform base_link ↔ camera.
+  -->
+  <node pkg="tf" type="static_transform_publisher" name="eef_to_camera_transform"
+        args="-0.045 0.0 0.02 -1.57 0 0 link5 rgbd_cam_color_optical_frame 100"/>
+
+  <!-- ─── IK / FK kinematics service (sim-only, pure Python — no ARM .so) ── -->
+  <!--
+    sim_kinematics_node.py replaces the hardware kinematics_node_6dof.py.
+    Uses scipy numerical IK + pure-Python Modified DH FK.
+    Reads joint states from /jetarm/joint_states (Gazebo).
+    Provides identical services: /kinematics/set_pose_target, /kinematics/get_current_pose
+  -->
+  <node name="kinematics"
+        pkg="hiwonder_grasp"
+        type="sim_kinematics_node.py"
+        output="screen"/>
+
+  <!-- ─── Joint initializer ──────────────────────────────────────────────── -->
+  <!--
+    Sends neutral joint commands (q=[0,-pi/2,0,-pi/2,0], gripper open) to all
+    Gazebo position controllers right after they start.  This is a safety net
+    in case the -J spawn flags are not honoured by a particular Gazebo version.
+    Runs once and exits.
+  -->
+  <node name="joint_initializer"
+        pkg="hiwonder_grasp"
+        type="joint_initializer.py"
+        output="screen"
+        />
+
+  <!-- ─── Sim grasp node ─────────────────────────────────────────────────── -->
+  <!--
+    Mock grasp attachment: provides /sim_grasp/attach and /sim_grasp/detach.
+    When attached, moves apriltag_cube to follow the EEF TF frame at 20 Hz.
+    pick_place.py calls these after close/before open gripper (sim only).
+  -->
+  <node name="sim_grasp"
+        pkg="hiwonder_grasp"
+        type="sim_grasp_node.py"
+        output="screen"/>
+
+  <!-- ─── Gripper mimic node ─────────────────────────────────────────────── -->
+  <!--
+    Gazebo ignores <mimic> joint tags. This node subscribes to the r_joint
+    command and republishes to l_joint, r_in_joint, r_out_joint, l_in_joint,
+    l_out_joint with their correct multipliers so the fingers actually move.
+  -->
+  <node name="gripper_mimic"
+        pkg="hiwonder_grasp"
+        type="gripper_mimic_node.py"
+        output="screen"/>
+
+  <!-- ─── Servo bridge ────────────────────────────────────────────────────── -->
+  <!--
+    Converts MultiRawIdPosDur / RawIdPosDur (pulse values)
+    → Gazebo ros_control Float64 joint commands (radians).
+    Delay 3 s to let Gazebo controllers finish spawning.
+  -->
+  <node name="servo_bridge"
+        pkg="hiwonder_grasp"
+        type="servo_bridge.py"
+        output="screen"
+        launch-prefix="bash -c 'sleep 3; $0 $@'"/>
+
+  <!-- ─── Sim tag publisher ───────────────────────────────────────────────── -->
+  <!--
+    Reads apriltag_cube position from /gazebo/model_states,
+    transforms to camera frame via TF,
+    publishes to /jetarm/object_poses for pick_place.py to consume.
+    Delay 4 s to let TF tree settle.
+  -->
+  <node name="sim_tag_publisher"
+        pkg="hiwonder_grasp"
+        type="sim_tag_publisher.py"
+        output="screen"
+        launch-prefix="bash -c 'sleep 4; $0 $@'"/>
+
+</launch>

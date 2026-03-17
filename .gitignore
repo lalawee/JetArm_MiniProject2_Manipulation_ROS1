@@ -1,0 +1,9 @@
+build/
+devel/
+.catkin_tools/
+.catkin_workspace
+src/CMakeLists.txt
+**/__pycache__/
+*.pyc
+*.pyo
+

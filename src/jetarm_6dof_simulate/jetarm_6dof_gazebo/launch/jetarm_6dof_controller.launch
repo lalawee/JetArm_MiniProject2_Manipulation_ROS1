@@ -14,6 +14,11 @@
                 joint4_position_controller
                 joint5_position_controller
                 r_joint_position_controller
+                l_joint_position_controller
+                r_in_joint_position_controller
+                r_out_joint_position_controller
+                l_in_joint_position_controller
+                l_out_joint_position_controller
                 "
     />
 

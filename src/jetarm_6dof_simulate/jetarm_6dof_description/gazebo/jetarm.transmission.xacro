@@ -21,5 +21,10 @@
         <xacro:gazebo_transmission name="${prefix}joint4"/>
         <xacro:gazebo_transmission name="${prefix}joint5"/>
         <xacro:gazebo_transmission name="${prefix}r_joint"/>
+        <xacro:gazebo_transmission name="${prefix}l_joint"/>
+        <xacro:gazebo_transmission name="${prefix}r_in_joint"/>
+        <xacro:gazebo_transmission name="${prefix}r_out_joint"/>
+        <xacro:gazebo_transmission name="${prefix}l_in_joint"/>
+        <xacro:gazebo_transmission name="${prefix}l_out_joint"/>
     </xacro:macro>
 </robot>

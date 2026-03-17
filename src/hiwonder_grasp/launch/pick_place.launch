@@ -1,0 +1,36 @@
+<launch>
+  <!--
+    pick_place.launch
+    =================
+    Runs the Challenge 1 pick-and-place node.
+
+    Arguments:
+      sim_mode       — true  : simulation (Gazebo) mode
+                       false : real hardware mode  (default)
+      target_tag_id  — AprilTag ID to pick  (default: 1)
+
+    Simulation usage (run AFTER sim_pick_place.launch is fully up):
+      roslaunch hiwonder_grasp pick_place.launch sim_mode:=true
+
+    Hardware usage:
+      roslaunch hiwonder_grasp pick_place.launch
+  -->
+
+  <arg name="sim_mode"      default="false"/>
+  <arg name="target_tag_id" default="1"/>
+
+  <!-- Static TF: link5 → rgbd_cam_color_optical_frame (hardware only — sim has its own) -->
+  <node unless="$(arg sim_mode)"
+        pkg="tf" type="static_transform_publisher" name="eef_to_camera_transform"
+        args="-0.045 0.0 0.02 -1.57 0 0 link5 rgbd_cam_color_optical_frame 100"/>
+
+  <node name="pick_place"
+        pkg="hiwonder_grasp"
+        type="pick_place.py"
+        output="screen"
+        required="true">
+    <param name="sim_mode"      value="$(arg sim_mode)"/>
+    <param name="target_tag_id" value="$(arg target_tag_id)"/>
+  </node>
+
+</launch>
